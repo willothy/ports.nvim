@@ -6,17 +6,7 @@ See what's listening on your machine — and what it actually is — without lea
 Postgres, Redis, …), and gives you kill / open-in-browser / tail-logs actions
 right there in the list.
 
-```
-  ports.nvim  —  4 listening
-
-    PORT  TYPE              PID    UPTIME   ADDRESS      COMMAND
-    3000   Next.js          54122  12m      127.0.0.1    node …/next dev
-    5173   Vite             54980  12m      127.0.0.1    node …/vite
-    5432   Postgres         610    3d 4h    *            postgres -D /usr/local/var/postgres
-  ⚠ 4000   Vite             39922  6d 1h    127.0.0.1    node …/vite        ⚠ duplicate server in the same project
-
-  o open   K kill   X force-kill   L logs   i info   y yank url   s stale-only   r refresh   q quit
-```
+<img width="1143" height="312" alt="Screenshot 2026-06-30 at 8 34 05 AM" src="https://github.com/user-attachments/assets/23388eb1-5dd1-48c6-bbcb-e4346c9c8b99" />
 
 ## Features
 
