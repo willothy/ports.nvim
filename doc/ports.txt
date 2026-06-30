@@ -1,0 +1,153 @@
+*ports.txt*  Detect and manage local listening ports
+
+==============================================================================
+CONTENTS                                                       *ports-contents*
+
+  1. Introduction ......................... |ports-introduction|
+  2. Requirements ......................... |ports-requirements|
+  3. Commands ............................. |ports-commands|
+  4. Mappings ............................. |ports-mappings|
+  5. Detection ............................ |ports-detection|
+  6. Stale servers ........................ |ports-stale|
+  7. Configuration ........................ |ports-configuration|
+  8. Lua API .............................. |ports-api|
+  9. Health ............................... |ports-health|
+
+==============================================================================
+1. INTRODUCTION                                            *ports-introduction*
+
+ports.nvim scans the local machine for listening TCP ports, identifies what is
+running on each (dev frameworks, databases, and other services), and exposes
+inline actions to kill the process, open it in a browser, or tail its logs.
+
+It requires no configuration: open |:Ports| and you get a live list of every
+listener with a best-effort identification of each one.
+
+==============================================================================
+2. REQUIREMENTS                                            *ports-requirements*
+
+- Neovim 0.10+ (uses |vim.system()| and |vim.ui.open()|).
+- `lsof` (macOS/Linux) or `ss` (Linux, iproute2) to scan ports.
+- `ps` for uptime and full command line.
+- `kill` to terminate processes; `tail` to follow logs.
+
+Run |:checkhealth| ports to verify.
+
+==============================================================================
+3. COMMANDS                                                    *ports-commands*
+
+                                                                       *:Ports*
+:Ports                  Open the interactive ports window.
+:Ports toggle           Toggle the window.
+:Ports kill {port}      Kill the process listening on {port} (SIGTERM).
+:Ports browser {port}   Open http://localhost:{port} in the browser.
+:Ports logs {port}      Discover and tail logs for the process on {port}.
+
+==============================================================================
+4. MAPPINGS                                                    *ports-mappings*
+
+Inside the ports window (all configurable, see |ports-configuration|):
+
+  o, <CR>   Open the selected port in a browser.
+  K         Kill the process (SIGTERM).
+  X         Force-kill the process (SIGKILL).
+  L         Tail logs for the process.
+  i         Show full details (pid, ppid, user, cwd, command, url).
+  y         Yank the URL to the + and " registers.
+  s         Toggle a stale-only filter.
+  r         Rescan.
+  ?         Show the keymap legend.
+  q, <Esc>  Close the window.
+
+==============================================================================
+5. DETECTION                                                  *ports-detection*
+
+Each listener is identified in three layers:
+
+  1. Command-line signatures for dev frameworks and app servers, e.g.
+     Next.js, Nuxt, Vite, Astro, Remix, Angular, Create React App, SvelteKit,
+     Gatsby, Storybook, webpack, Vite, esbuild, Django, Flask, Uvicorn,
+     Gunicorn, FastAPI, Rails, Puma, Laravel, Phoenix, Hugo, Jekyll.
+
+  2. Well-known service commands and ports, e.g. Postgres (5432), MySQL
+     (3306), Redis (6379), MongoDB (27017), Elasticsearch (9200), RabbitMQ
+     (5672), Memcached (11211), Kafka (9092), and others.
+
+  3. A fallback to the raw command name (with bare node/bun/deno/python
+     treated as probable dev servers for staleness purposes).
+
+==============================================================================
+6. STALE SERVERS                                                  *ports-stale*
+
+Dev servers (only) are checked against enabled staleness rules and annotated
+with a reason shown in the list and marked with a gutter warning:
+
+  orphaned     Working directory no longer exists on disk.
+  duplicates   More than one dev server runs from the same directory.
+  max_age      Running longer than `stale.max_age` seconds (0 disables).
+
+Press `s` in the window to filter to stale servers only.
+
+==============================================================================
+7. CONFIGURATION                                          *ports-configuration*
+
+Calling setup() is optional. Defaults: >lua
+
+  require("ports").setup({
+    stale = {
+      enabled = true,
+      orphaned = true,
+      duplicates = true,
+      max_age = 0,
+    },
+    scan = {
+      include_loopback = true,   -- 127.0.0.1 / ::1
+      include_any = true,        -- 0.0.0.0 / *
+      include_external = true,   -- specific external interface
+    },
+    browser = {
+      cmd = nil,                 -- nil → vim.ui.open; string → {cmd, url}; or function(url)
+      scheme = "http",
+      host = "localhost",
+    },
+    ui = {
+      border = "rounded",
+      width = 0.82,              -- fraction of editor, or absolute cols (>1)
+      height = 0.6,
+      icons = true,              -- Nerd Font glyphs
+      auto_refresh = 0,          -- ms between rescans while open (0 = off)
+    },
+    kill = {
+      signal = "TERM",
+      confirm = true,
+    },
+    keymaps = {
+      open = "o", kill = "K", force_kill = "X", logs = "L", info = "i",
+      yank = "y", refresh = "r", stale = "s", help = "?", quit = "q",
+    },
+  })
+<
+Set any keymap to `false` to disable it.
+
+==============================================================================
+8. LUA API                                                          *ports-api*
+
+ports.setup({opts})            Configure (optional).
+ports.open()                   Open the window.
+ports.toggle()                 Toggle the window.
+ports.list({cb})               Scan and call cb(err, entries) on the main loop.
+ports.kill({port} [,{signal}]) Kill the listener on {port}.
+ports.open_browser({port})     Open the browser for {port}.
+ports.logs({port})             Tail logs for {port}.
+
+Each entry passed to `ports.list` is a table with: `port`, `proto`, `address`,
+`pid`, `command`, `args`, `user`, `ppid`, `cwd`, `uptime`, `type`, `icon`,
+`is_server`, and `stale` ({ reasons = {...} }) when applicable.
+
+==============================================================================
+9. HEALTH                                                        *ports-health*
+
+`:checkhealth ports` reports the Neovim version, the available scanner backend
+(lsof or ss), and whether `ps`, `kill`, `tail`, and `vim.ui.open` are usable.
+
+vim:tw=78:ts=8:ft=help:norl:
