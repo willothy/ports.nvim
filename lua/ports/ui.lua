@@ -17,16 +17,24 @@ local HL = {
   PortsAddress = "String",
   PortsCommand = "Comment",
   PortsStale = "DiagnosticWarn",
-  PortsStaleGutter = "DiagnosticSignWarn",
+  PortsDotOk = "DiagnosticOk",
+  PortsDotStale = "DiagnosticWarn",
   PortsHeader = "Comment",
-  PortsFooter = "Comment",
-  PortsColHeader = "Title",
+  PortsFooter = "NonText",
+  PortsKey = "Special",
+  PortsCount = "Identifier",
+  PortsRule = "FloatBorder",
+  PortsCursorLine = "CursorLine",
 }
 
 local function setup_highlights()
   for name, link in pairs(HL) do
     vim.api.nvim_set_hl(0, name, { link = link, default = true })
   end
+  -- Column header reads best as a dim, bold label; derive it from Comment so
+  -- it tracks the colorscheme while staying distinct from data rows.
+  local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
+  vim.api.nvim_set_hl(0, "PortsColHeader", { fg = comment.fg, bold = true, default = true })
 end
 
 --- Module-level singleton state for the one ports window.
@@ -50,7 +58,7 @@ local state = {
 
 -- Column widths (display cells). Command takes the remaining space.
 local COL = {
-  gutter = 2,
+  gutter = 3, -- " ● " status dot with margins
   port = 6,
   type = 20,
   pid = 8,
@@ -104,27 +112,30 @@ end
 local function render_entry(entry, cmd_w)
   local line = new_line()
 
-  -- Gutter: stale warning marker.
-  if entry.stale then
-    add(line, pad("⚠", COL.gutter), "PortsStaleGutter")
-  else
-    add(line, pad("", COL.gutter))
-  end
+  -- Gutter: a status dot, coloured by health (green = ok, amber = stale).
+  add(line, " ")
+  add(line, "●", entry.stale and "PortsDotStale" or "PortsDotOk")
+  add(line, " ")
 
   -- Port.
   add(line, pad(tostring(entry.port), COL.port, true), "PortsPort")
   add(line, GAP)
 
-  -- Type (icon + detected name) — the "what is this?" column.
+  -- Type (icon + detected name) — the "what is this?" column. The glyph and
+  -- the name are coloured separately so the icon keeps its category accent.
   local label = entry.type or entry.command or "?"
-  local type_cell
-  if config.options.ui.icons and entry.icon and entry.icon ~= "" then
-    type_cell = entry.icon .. " " .. label
-  else
-    type_cell = label
+  local icon = config.options.ui.icons and entry.icon ~= nil and entry.icon ~= "" and entry.icon or nil
+  local name_w = COL.type - (icon and 2 or 0)
+  local name = util.truncate(label, name_w)
+  if icon then
+    add(line, icon, "PortsIcon")
+    add(line, " ")
   end
-  type_cell = util.truncate(type_cell, COL.type)
-  add(line, pad(type_cell, COL.type), "PortsType")
+  add(line, name, "PortsType")
+  local used = (icon and 2 or 0) + vim.fn.strdisplaywidth(name)
+  if used < COL.type then
+    add(line, string.rep(" ", COL.type - used))
+  end
   add(line, GAP)
 
   -- PID.
@@ -176,6 +187,46 @@ local function help_lines()
   return { "  " .. table.concat(present, "   ") }
 end
 
+--- The footer key/label hints, built as a styled line so keys stand out from
+--- their descriptions.
+---@return table line
+local function footer_line()
+  local k = config.options.keymaps
+  local items = {
+    { "open", "open" },
+    { "kill", "kill" },
+    { "force_kill", "force" },
+    { "logs", "logs" },
+    { "info", "info" },
+    { "yank", "yank" },
+    { "stale", "stale" },
+    { "refresh", "refresh" },
+    { "quit", "quit" },
+  }
+  local line = new_line()
+  add(line, " ")
+  local first = true
+  for _, it in ipairs(items) do
+    local lhs = k[it[1]]
+    if lhs then
+      add(line, first and " " or "   ")
+      add(line, lhs, "PortsKey")
+      add(line, " " .. it[2], "PortsFooter")
+      first = false
+    end
+  end
+  return line
+end
+
+--- A horizontal rule spanning the inner window width.
+---@param width integer
+---@return table line
+local function rule_line(width)
+  local line = new_line()
+  add(line, " " .. string.rep("─", math.max(1, width - 2)), "PortsRule")
+  return line
+end
+
 --- Build all buffer lines + highlights + the line→entry row map.
 ---@param entries ports.Entry[]
 ---@return string[] lines
@@ -207,14 +258,24 @@ local function build(entries)
       stale_count = stale_count + 1
     end
   end
+  local icons = config.options.ui.icons
   local summary = new_line()
-  add(summary, "  ports.nvim", "PortsTitle")
-  add(summary, ("  —  %d listening"):format(#entries), "PortsHeader")
+  add(summary, " ")
+  if icons then
+    add(summary, " ", "PortsTitle")
+  end
+  add(summary, "Ports", "PortsTitle")
+  add(summary, "   ")
+  add(summary, tostring(#entries), "PortsCount")
+  add(summary, " listening", "PortsHeader")
   if stale_count > 0 then
-    add(summary, ("  •  %d stale"):format(stale_count), "PortsStale")
+    add(summary, "  ·  ", "PortsHeader")
+    add(summary, tostring(stale_count), "PortsStale")
+    add(summary, " stale", "PortsStale")
   end
   if state.stale_only then
-    add(summary, "  •  [stale-only]", "PortsHeader")
+    add(summary, "  ·  ", "PortsHeader")
+    add(summary, "stale-only", "PortsHeader")
   end
   push(summary)
   push(new_line())
@@ -235,6 +296,7 @@ local function build(entries)
   add(head, "COMMAND")
   local head_row = push(head)
   hls[#hls + 1] = { head_row, 0, #head.text, "PortsColHeader" }
+  push(rule_line(win_width))
 
   -- Live entries.
   local shown = 0
@@ -255,13 +317,9 @@ local function build(entries)
     push(empty)
   end
 
-  -- Footer.
-  push(new_line())
-  for _, hline in ipairs(help_lines()) do
-    local row = #lines
-    lines[#lines + 1] = hline
-    hls[#hls + 1] = { row, 0, #hline, "PortsFooter" }
-  end
+  -- Footer: a rule, then the styled key/label hints.
+  push(rule_line(win_width))
+  push(footer_line())
 
   return lines, hls, rows, stale_marks
 end
@@ -489,6 +547,7 @@ local function win_geometry()
   end
   local width = dim(ui.width, vim.o.columns)
   local height = dim(ui.height, vim.o.lines)
+  local title = ui.icons and "  Ports " or " Ports "
   return {
     relative = "editor",
     width = width,
@@ -497,7 +556,7 @@ local function win_geometry()
     col = math.floor((vim.o.columns - width) / 2),
     style = "minimal",
     border = ui.border,
-    title = " Ports ",
+    title = { { title, "PortsTitle" } },
     title_pos = "center",
   }
 end
@@ -545,7 +604,11 @@ function M.open()
 
   state.win = vim.api.nvim_open_win(state.buf, true, win_geometry())
   vim.api.nvim_set_option_value("cursorline", true, { win = state.win })
+  vim.api.nvim_set_option_value("cursorlineopt", "line", { win = state.win })
   vim.api.nvim_set_option_value("wrap", false, { win = state.win })
+  -- Route the cursorline through a dedicated group so it can be themed for the
+  -- ports window without touching the global CursorLine.
+  vim.api.nvim_set_option_value("winhighlight", "CursorLine:PortsCursorLine", { win = state.win })
 
   set_keymaps()
 
