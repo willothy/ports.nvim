@@ -24,7 +24,6 @@ local HL = {
   PortsKey = "Special",
   PortsCount = "Identifier",
   PortsRule = "FloatBorder",
-  PortsCursorLine = "CursorLine",
 }
 
 --- Border title/footer chunks default to rendering on the bright FloatTitle /
@@ -66,6 +65,13 @@ local function setup_highlights()
     vim.api.nvim_set_hl(0, name, hl)
   end
 
+  -- The selected-row highlight must be a full-width background fill, but some
+  -- colorschemes define CursorLine as underline-only. Reuse CursorLine's
+  -- background when it has one, otherwise fall back to a visible selection
+  -- background so the current row is always clearly marked to the edge.
+  local cursor_bg = attrs("CursorLine").bg or attrs("Visual").bg or attrs("PmenuSel").bg
+  vim.api.nvim_set_hl(0, "PortsCursorLine", { bg = cursor_bg, default = true })
+
   -- Thin bright bars flanking the title, drawn as a foreground glyph (not a
   -- filled block) in the FloatTitle colour, falling back to the border colour.
   local bar_fg = attrs("FloatTitle").bg or attrs("FloatBorder").fg
@@ -77,6 +83,8 @@ end
 ---@field buf integer|nil
 ---@field win integer|nil
 ---@field rows table<integer, ports.Entry> line (1-based) -> entry
+---@field first_row integer|nil first selectable line (1-based)
+---@field last_row integer|nil  last selectable line (1-based)
 ---@field stale_only boolean
 ---@field show_help boolean
 ---@field loading boolean
@@ -85,6 +93,8 @@ local state = {
   buf = nil,
   win = nil,
   rows = {},
+  first_row = nil,
+  last_row = nil,
   stale_only = false,
   show_help = false,
   loading = false,
@@ -416,6 +426,16 @@ local function paint(entries)
 
   local lines, hls, rows, stale_marks = build(entries, cmd_w, width)
   state.rows = rows
+  -- Selectable rows are contiguous; remember the bounds for cursor clamping.
+  state.first_row, state.last_row = nil, nil
+  for lnum in pairs(rows) do
+    if not state.first_row or lnum < state.first_row then
+      state.first_row = lnum
+    end
+    if not state.last_row or lnum > state.last_row then
+      state.last_row = lnum
+    end
+  end
 
   -- Height: fit every row, capped at the configured maximum and the screen.
   local max_h = math.max(1, resolve_dim(ui.height, vim.o.lines))
@@ -469,12 +489,29 @@ local function place_cursor()
   if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
     return
   end
-  local total = vim.api.nvim_buf_line_count(state.buf)
-  for lnum = 1, total do
-    if state.rows[lnum] then
-      vim.api.nvim_win_set_cursor(state.win, { lnum, 0 })
-      return
-    end
+  if state.first_row then
+    vim.api.nvim_win_set_cursor(state.win, { state.first_row, 0 })
+  end
+end
+
+--- Keep the cursor on a selectable row by clamping it to the row range. Rows
+--- are contiguous, so the header/rule above and any lines below are skipped.
+local function snap_cursor()
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    return
+  end
+  if not state.first_row then
+    return
+  end
+  local pos = vim.api.nvim_win_get_cursor(state.win)
+  local target
+  if pos[1] < state.first_row then
+    target = state.first_row
+  elseif pos[1] > state.last_row then
+    target = state.last_row
+  end
+  if target then
+    vim.api.nvim_win_set_cursor(state.win, { target, pos[2] })
   end
 end
 
@@ -681,6 +718,7 @@ function M.close()
   state.win = nil
   state.buf = nil
   state.rows = {}
+  state.first_row, state.last_row = nil, nil
 end
 
 --- Whether the window is currently open.
@@ -713,6 +751,12 @@ function M.open()
 
   set_keymaps()
 
+  -- Keep the cursor on the selectable rows as the user navigates.
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = state.buf,
+    callback = snap_cursor,
+  })
+
   -- Clean up state if the window is closed by other means.
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(state.win),
@@ -722,6 +766,7 @@ function M.open()
       state.win = nil
       state.buf = nil
       state.rows = {}
+      state.first_row, state.last_row = nil, nil
     end,
   })
 
