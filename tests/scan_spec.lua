@@ -1,0 +1,55 @@
+local scan = require("ports.scan")
+
+describe("scan.parse_socket_name", function()
+  it("parses the any-address form", function()
+    local addr, port = scan.parse_socket_name("*:3000")
+    assert.equals("*", addr)
+    assert.equals(3000, port)
+  end)
+
+  it("parses an IPv4 address", function()
+    local addr, port = scan.parse_socket_name("127.0.0.1:5432")
+    assert.equals("127.0.0.1", addr)
+    assert.equals(5432, port)
+  end)
+
+  it("strips brackets from an IPv6 address", function()
+    local addr, port = scan.parse_socket_name("[::1]:5173")
+    assert.equals("::1", addr)
+    assert.equals(5173, port)
+  end)
+
+  it("normalises an empty address to '*'", function()
+    local addr, port = scan.parse_socket_name(":8080")
+    assert.equals("*", addr)
+    assert.equals(8080, port)
+  end)
+
+  it("returns nil when there is no port", function()
+    local addr, port = scan.parse_socket_name("garbage")
+    assert.is_nil(addr)
+    assert.is_nil(port)
+  end)
+end)
+
+describe("scan.parse_ss_line", function()
+  it("extracts port, command, and pid from an ss row", function()
+    local e =
+      scan.parse_ss_line('LISTEN 0      511          127.0.0.1:3000       0.0.0.0:*    users:(("node",pid=4242,fd=23))')
+    assert.equals(3000, e.port)
+    assert.equals("node", e.command)
+    assert.equals(4242, e.pid)
+    assert.equals("127.0.0.1", e.address)
+  end)
+
+  it("returns nil for a blank line", function()
+    assert.is_nil(scan.parse_ss_line("   "))
+  end)
+end)
+
+describe("scan.backend", function()
+  it("reports a supported backend on this platform", function()
+    -- The CI/dev environment always has lsof or ss available.
+    assert.is_truthy(scan.backend())
+  end)
+end)

@@ -1,2 +1,4 @@
 *.luac
 .luarc.json
+.tests/
+doc/tags
