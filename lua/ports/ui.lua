@@ -27,14 +27,44 @@ local HL = {
   PortsCursorLine = "CursorLine",
 }
 
+--- Border title/footer chunks default to rendering on the bright FloatTitle /
+--- FloatFooter background. We want the chunk text to sit on the ordinary float
+--- background instead, so the bright accent stays on the border itself rather
+--- than filling a bar behind the title and footer. These derived groups graft
+--- each accent foreground onto the NormalFloat background.
+---@type table<string, {fg: string, extra: table|nil}>
+local DERIVED = {
+  PortsTitleName = { fg = "Title", extra = { bold = true } },
+  PortsTitleDim = { fg = "Comment" },
+  PortsTitleCount = { fg = "Identifier" },
+  PortsTitleStale = { fg = "DiagnosticWarn" },
+  PortsFooterKey = { fg = "Special" },
+  PortsFooterLabel = { fg = "NonText" },
+}
+
 local function setup_highlights()
   for name, link in pairs(HL) do
     vim.api.nvim_set_hl(0, name, { link = link, default = true })
   end
+
+  local function attrs(group)
+    return vim.api.nvim_get_hl(0, { name = group, link = false })
+  end
+
   -- Column header reads best as a dim, bold label; derive it from Comment so
   -- it tracks the colorscheme while staying distinct from data rows.
-  local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
-  vim.api.nvim_set_hl(0, "PortsColHeader", { fg = comment.fg, bold = true, default = true })
+  vim.api.nvim_set_hl(0, "PortsColHeader", { fg = attrs("Comment").fg, bold = true, default = true })
+
+  -- Match the window body so title/footer text blends with the float instead
+  -- of sitting on the bright FloatTitle/FloatFooter bar.
+  local float_bg = attrs("NormalFloat").bg or attrs("Normal").bg
+  for name, spec in pairs(DERIVED) do
+    local hl = { fg = attrs(spec.fg).fg, bg = float_bg, default = true }
+    if spec.extra then
+      hl = vim.tbl_extend("force", hl, spec.extra)
+    end
+    vim.api.nvim_set_hl(0, name, hl)
+  end
 end
 
 --- Module-level singleton state for the one ports window.
@@ -220,20 +250,20 @@ local function footer_chunks()
     chunks[#chunks + 1] = { text, hl }
     width = width + vim.fn.strdisplaywidth(text)
   end
-  put(" ")
+  put(" ", "PortsFooterLabel")
   local first = true
   for _, it in ipairs(items) do
     local lhs = k[it[1]]
     if lhs then
       if not first then
-        put("   ", "PortsFooter")
+        put("   ", "PortsFooterLabel")
       end
-      put(lhs, "PortsKey")
-      put(" " .. it[2], "PortsFooter")
+      put(lhs, "PortsFooterKey")
+      put(" " .. it[2], "PortsFooterLabel")
       first = false
     end
   end
-  put(" ")
+  put(" ", "PortsFooterLabel")
   return chunks, width
 end
 
@@ -249,24 +279,24 @@ local function title_chunks(n_listening, n_stale)
     chunks[#chunks + 1] = { text, hl }
     width = width + vim.fn.strdisplaywidth(text)
   end
-  put(" ")
+  put(" ", "PortsTitleDim")
   if config.options.ui.icons then
-    put(" ", "PortsTitle")
+    put(" ", "PortsTitleName")
   end
-  put("Ports", "PortsTitle")
-  put("  ·  ", "PortsHeader")
-  put(tostring(n_listening), "PortsCount")
-  put(" listening", "PortsHeader")
+  put("Ports", "PortsTitleName")
+  put("  ·  ", "PortsTitleDim")
+  put(tostring(n_listening), "PortsTitleCount")
+  put(" listening", "PortsTitleDim")
   if n_stale > 0 then
-    put("  ·  ", "PortsHeader")
-    put(tostring(n_stale), "PortsStale")
-    put(" stale", "PortsStale")
+    put("  ·  ", "PortsTitleDim")
+    put(tostring(n_stale), "PortsTitleStale")
+    put(" stale", "PortsTitleStale")
   end
   if state.stale_only then
-    put("  ·  ", "PortsHeader")
-    put("stale-only", "PortsHeader")
+    put("  ·  ", "PortsTitleDim")
+    put("stale-only", "PortsTitleDim")
   end
-  put(" ")
+  put(" ", "PortsTitleDim")
   return chunks, width
 end
 
