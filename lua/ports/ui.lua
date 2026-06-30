@@ -65,6 +65,11 @@ local function setup_highlights()
     end
     vim.api.nvim_set_hl(0, name, hl)
   end
+
+  -- Thin bright bars flanking the title, drawn as a foreground glyph (not a
+  -- filled block) in the FloatTitle colour, falling back to the border colour.
+  local bar_fg = attrs("FloatTitle").bg or attrs("FloatBorder").fg
+  vim.api.nvim_set_hl(0, "PortsTitleBar", { fg = bar_fg, bg = float_bg, default = true })
 end
 
 --- Module-level singleton state for the one ports window.
@@ -279,7 +284,7 @@ local function title_chunks(n_listening, n_stale)
     chunks[#chunks + 1] = { text, hl }
     width = width + vim.fn.strdisplaywidth(text)
   end
-  put(" ", "PortsTitleDim")
+  put("▎", "PortsTitleBar")
   if config.options.ui.icons then
     put(" ", "PortsTitleName")
   end
@@ -297,6 +302,7 @@ local function title_chunks(n_listening, n_stale)
     put("stale-only", "PortsTitleDim")
   end
   put(" ", "PortsTitleDim")
+  put("🮇", "PortsTitleBar")
   return chunks, width
 end
 
