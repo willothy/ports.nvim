@@ -97,12 +97,22 @@ local function add(line, text, hl)
   end
 end
 
---- Compute the width available for the command column.
----@param win_width integer
+--- Total display width of every column up to (but excluding) COMMAND.
 ---@return integer
-local function command_width(win_width)
-  local used = COL.gutter + #GAP + COL.port + #GAP + COL.type + #GAP + COL.pid + #GAP + COL.uptime + #GAP + COL.address + #GAP
-  return math.max(10, win_width - used - 1)
+local function fixed_prefix_width()
+  return COL.gutter + COL.port + #GAP + COL.type + #GAP + COL.pid + #GAP + COL.uptime + #GAP + COL.address + #GAP
+end
+
+--- Resolve a config dimension: a fraction (<=1) of `total`, or an absolute
+--- count capped at `total`.
+---@param v number
+---@param total integer
+---@return integer
+local function resolve_dim(v, total)
+  if v <= 1 then
+    return math.floor(total * v)
+  end
+  return math.min(math.floor(v), total)
 end
 
 --- Render a single entry row into a line builder.
@@ -187,10 +197,11 @@ local function help_lines()
   return { "  " .. table.concat(present, "   ") }
 end
 
---- The footer key/label hints, built as a styled line so keys stand out from
---- their descriptions.
----@return table line
-local function footer_line()
+--- The keymap legend as border-footer chunks, so it stays pinned to the
+--- window frame and remains visible even when the list scrolls. Returns the
+--- chunk list and its total display width.
+---@return table[] chunks, integer width
+local function footer_chunks()
   local k = config.options.keymaps
   local items = {
     { "open", "open" },
@@ -203,19 +214,60 @@ local function footer_line()
     { "refresh", "refresh" },
     { "quit", "quit" },
   }
-  local line = new_line()
-  add(line, " ")
+  local chunks = {}
+  local width = 0
+  local function put(text, hl)
+    chunks[#chunks + 1] = { text, hl }
+    width = width + vim.fn.strdisplaywidth(text)
+  end
+  put(" ")
   local first = true
   for _, it in ipairs(items) do
     local lhs = k[it[1]]
     if lhs then
-      add(line, first and " " or "   ")
-      add(line, lhs, "PortsKey")
-      add(line, " " .. it[2], "PortsFooter")
+      if not first then
+        put("   ", "PortsFooter")
+      end
+      put(lhs, "PortsKey")
+      put(" " .. it[2], "PortsFooter")
       first = false
     end
   end
-  return line
+  put(" ")
+  return chunks, width
+end
+
+--- The window title as border chunks: a styled name plus live counts. Returns
+--- the chunk list and its total display width.
+---@param n_listening integer
+---@param n_stale integer
+---@return table[] chunks, integer width
+local function title_chunks(n_listening, n_stale)
+  local chunks = {}
+  local width = 0
+  local function put(text, hl)
+    chunks[#chunks + 1] = { text, hl }
+    width = width + vim.fn.strdisplaywidth(text)
+  end
+  put(" ")
+  if config.options.ui.icons then
+    put(" ", "PortsTitle")
+  end
+  put("Ports", "PortsTitle")
+  put("  ·  ", "PortsHeader")
+  put(tostring(n_listening), "PortsCount")
+  put(" listening", "PortsHeader")
+  if n_stale > 0 then
+    put("  ·  ", "PortsHeader")
+    put(tostring(n_stale), "PortsStale")
+    put(" stale", "PortsStale")
+  end
+  if state.stale_only then
+    put("  ·  ", "PortsHeader")
+    put("stale-only", "PortsHeader")
+  end
+  put(" ")
+  return chunks, width
 end
 
 --- A horizontal rule spanning the inner window width.
@@ -227,16 +279,17 @@ local function rule_line(width)
   return line
 end
 
---- Build all buffer lines + highlights + the line→entry row map.
+--- Build the table buffer (column header + rule + rows). Chrome — the title
+--- counts and the keymap legend — lives in the window border, not here, so it
+--- stays visible when the table scrolls.
 ---@param entries ports.Entry[]
+---@param cmd_w integer  width allotted to the COMMAND column
+---@param rule_w integer width of the header rule
 ---@return string[] lines
 ---@return table[] hls            list of {row, startc, endc, hl}
 ---@return table<integer, ports.Entry> rows
 ---@return table[] stale_marks    list of {row, reason}
-local function build(entries)
-  local win_width = state.win and vim.api.nvim_win_get_width(state.win) or 80
-  local cmd_w = command_width(win_width)
-
+local function build(entries, cmd_w, rule_w)
   local lines = {}
   local hls = {}
   local rows = {}
@@ -250,35 +303,6 @@ local function build(entries)
     end
     return row
   end
-
-  -- Summary header.
-  local stale_count = 0
-  for _, e in ipairs(entries) do
-    if e.stale then
-      stale_count = stale_count + 1
-    end
-  end
-  local icons = config.options.ui.icons
-  local summary = new_line()
-  add(summary, " ")
-  if icons then
-    add(summary, " ", "PortsTitle")
-  end
-  add(summary, "Ports", "PortsTitle")
-  add(summary, "   ")
-  add(summary, tostring(#entries), "PortsCount")
-  add(summary, " listening", "PortsHeader")
-  if stale_count > 0 then
-    add(summary, "  ·  ", "PortsHeader")
-    add(summary, tostring(stale_count), "PortsStale")
-    add(summary, " stale", "PortsStale")
-  end
-  if state.stale_only then
-    add(summary, "  ·  ", "PortsHeader")
-    add(summary, "stale-only", "PortsHeader")
-  end
-  push(summary)
-  push(new_line())
 
   -- Column header.
   local head = new_line()
@@ -296,7 +320,7 @@ local function build(entries)
   add(head, "COMMAND")
   local head_row = push(head)
   hls[#hls + 1] = { head_row, 0, #head.text, "PortsColHeader" }
-  push(rule_line(win_width))
+  push(rule_line(rule_w))
 
   -- Live entries.
   local shown = 0
@@ -317,21 +341,62 @@ local function build(entries)
     push(empty)
   end
 
-  -- Footer: a rule, then the styled key/label hints.
-  push(rule_line(win_width))
-  push(footer_line())
-
   return lines, hls, rows, stale_marks
 end
 
---- Paint the buffer with the current data.
+--- Paint the buffer with the current data and size the window to fit it,
+--- capped at the configured width/height maxima.
 ---@param entries ports.Entry[]
 local function paint(entries)
   if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
     return
   end
-  local lines, hls, rows, stale_marks = build(entries)
+  local ui = config.options.ui
+
+  -- Counts (over all listeners, regardless of any stale-only filter).
+  local stale_count = 0
+  for _, e in ipairs(entries) do
+    if e.stale then
+      stale_count = stale_count + 1
+    end
+  end
+
+  -- Width: fit the longest visible command, but also the title and legend, all
+  -- capped at the configured maximum. The COMMAND column absorbs the slack.
+  local fixed = fixed_prefix_width()
+  local max_cmd = vim.fn.strdisplaywidth("COMMAND")
+  for _, e in ipairs(entries) do
+    if not state.stale_only or e.stale then
+      max_cmd = math.max(max_cmd, vim.fn.strdisplaywidth(e.args or e.command or ""))
+    end
+  end
+  local title, title_w = title_chunks(#entries, stale_count)
+  local _, footer_w = footer_chunks()
+
+  local max_w = math.max(24, resolve_dim(ui.width, vim.o.columns))
+  local desired = math.max(fixed + max_cmd, title_w + 2, footer_w + 2)
+  local width = math.max(fixed + 8, math.min(max_w, desired))
+  local cmd_w = width - fixed
+
+  local lines, hls, rows, stale_marks = build(entries, cmd_w, width)
   state.rows = rows
+
+  -- Height: fit every row, capped at the configured maximum and the screen.
+  local max_h = math.max(1, resolve_dim(ui.height, vim.o.lines))
+  local height = math.max(1, math.min(#lines, max_h, vim.o.lines - 2))
+
+  -- Resize and re-centre, and refresh the live counts in the border title.
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    pcall(vim.api.nvim_win_set_config, state.win, {
+      relative = "editor",
+      width = width,
+      height = height,
+      row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+      col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+      title = title,
+      title_pos = "center",
+    })
+  end
 
   vim.api.nvim_set_option_value("modifiable", true, { buf = state.buf })
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
@@ -535,29 +600,29 @@ local function set_keymaps()
   vim.keymap.set("n", "<Esc>", M.close, { buffer = state.buf, nowait = true, silent = true, desc = "ports: close" })
 end
 
---- Compute floating-window geometry from config fractions/absolutes.
+--- Initial floating-window geometry, shown while the first scan runs. The
+--- window is resized to fit content by `paint`; the border footer (the keymap
+--- legend) is static and set once here.
 ---@return table win_config
 local function win_geometry()
   local ui = config.options.ui
-  local function dim(v, total)
-    if v <= 1 then
-      return math.floor(total * v)
-    end
-    return math.min(v, total)
-  end
-  local width = dim(ui.width, vim.o.columns)
-  local height = dim(ui.height, vim.o.lines)
-  local title = ui.icons and "  Ports " or " Ports "
+  local footer, footer_w = footer_chunks()
+  local title = title_chunks(0, 0)
+  local max_w = math.max(24, resolve_dim(ui.width, vim.o.columns))
+  local width = math.min(max_w, footer_w + 2)
+  local height = 1
   return {
     relative = "editor",
     width = width,
     height = height,
-    row = math.floor((vim.o.lines - height) / 2),
-    col = math.floor((vim.o.columns - width) / 2),
+    row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+    col = math.max(0, math.floor((vim.o.columns - width) / 2)),
     style = "minimal",
     border = ui.border,
-    title = { { title, "PortsTitle" } },
+    title = title,
     title_pos = "center",
+    footer = footer,
+    footer_pos = "center",
   }
 end
 
