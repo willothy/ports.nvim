@@ -522,7 +522,9 @@ function M.refresh(keep_cursor)
     return
   end
   state.loading = true
-  local saved = keep_cursor and state.win and vim.api.nvim_win_is_valid(state.win)
+  local saved = keep_cursor
+      and state.win
+      and vim.api.nvim_win_is_valid(state.win)
       and vim.api.nvim_win_get_cursor(state.win)
     or nil
   require("ports").list(function(err, entries)
